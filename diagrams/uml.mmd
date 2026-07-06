@@ -1,15 +1,55 @@
 classDiagram
-    %% Replace the placeholders below with your actual classes, attributes, methods, and relationships.
-    %% Keep this file updated so it matches your final implementation.
+    %% PawPal+ class diagram
 
-    class ClassName {
-        +type attribute
-        +method() returnType
+    class Pet {
+        +int petId
+        +int ownerId
+        +string name
+        +string species
+        +string breed
+        +int age
+        +float weight
+        +getPetInfo() string
+        +updateProfile() void
     }
 
-    class AnotherClass {
-        +type attribute
-        +method() returnType
+    class Owner {
+        +int ownerId
+        +string name
+        +float hoursAvailableDaily
+        +bool remindersEnabled
     }
 
-    ClassName --> AnotherClass : relationship
+    class CareTask {
+        +int taskId
+        +int petId
+        +string taskName
+        +string category
+        +int priority
+        +bool completed
+    }
+
+    class Scheduler {
+        +Owner[] owners
+        +Pet[] pets
+        +CareTask[] tasks
+        +addOwner(owner) void
+        +addPet(pet) void
+        +addTask(task) void
+        +getOwner(ownerId) Owner
+        +getPet(petId) Pet
+        +getPetsForOwner(ownerId) Pet[]
+        +getTasksForPet(petId) CareTask[]
+        +getTasksForOwner(ownerId) CareTask[]
+        +getTasksByCategory(category) CareTask[]
+        +getPendingTasks(petId) CareTask[]
+        +completeTask(taskId) bool
+        +removeTask(taskId) bool
+    }
+
+    Owner "1" --> "1..*" Pet : owns
+    Pet "1" --> "0..*" CareTask : has
+    Owner "1" --> "0..*" CareTask : manages
+    Scheduler "1" o-- "0..*" Owner : manages
+    Scheduler "1" o-- "0..*" Pet : manages
+    Scheduler "1" o-- "0..*" CareTask : manages
