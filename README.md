@@ -22,6 +22,26 @@ Your final app should:
 - Display the plan clearly (and ideally explain the reasoning)
 - Include tests for the most important scheduling behaviors
 
+## ✨ Features
+
+The scheduling engine (`pawpal_system.py`) implements these algorithms:
+
+- **Sorting by time** — orders tasks by time of day (earliest first) using a
+  parsed numeric key (minutes since midnight), so `"9:00"` sorts before
+  `"18:00"` instead of after it.
+- **Sorting by priority** — orders tasks highest priority first, with time of
+  day as the tie-breaker (and vice-versa when sorting by time).
+- **Filtering** — narrows tasks by pet name, completion status, or both, via a
+  single composable method.
+- **Today's schedule** — returns only pending tasks due on or before today,
+  time-ordered, so tomorrow's freshly spawned occurrences stay out of view.
+- **Conflict warnings** — flags tasks that clash on the same date and time,
+  catching both a single pet double-booked and two pets needing attention at
+  once; also available as a crash-safe, human-readable warning string.
+- **Daily / weekly recurrence** — completing a recurring task automatically
+  spawns its next occurrence with the due date advanced (+1 day / +7 days).
+- **Grouping** — buckets tasks by category or by pet, each bucket sorted.
+
 ## Getting started
 
 ### Setup
@@ -80,6 +100,16 @@ Sample test output:
 
 ```
 # Paste your pytest output here
+S C:\Users\ireol\ai110-module2show-pawpal-starter> python -m pytest
+================================================ test session starts =================================================
+platform win32 -- Python 3.14.3, pytest-9.1.1, pluggy-1.6.0
+rootdir: C:\Users\ireol\ai110-module2show-pawpal-starter
+plugins: anyio-4.14.0
+collected 5 items                                                                                                     
+
+tests\test_pawpal.py .....                                                                                      [100%]
+
+================================================= 5 passed in 0.03s ==================================================
 ```
 
 ## 📐 Smarter Scheduling
@@ -155,14 +185,111 @@ occurrence is created automatically:
 One-off tasks don't recur, and completing an already-completed task does nothing
 (no duplicate spawns).
 
-## 📸 Demo Walkthrough
+## 🚶 Demo Walkthrough
 
-Describe your app in numbered steps so a reader can follow along without watching a video:
+### The interface
 
-1. <!-- Describe this step -->
-2. <!-- Describe this step -->
-3. <!-- Describe this step -->
-4. <!-- Describe this step -->
-5. <!-- Add more steps as needed -->
+Launch the Streamlit app with `streamlit run app.py`. The page is organized top
+to bottom into a few actions:
+
+- **Add a Pet** — enter a name, species, breed, age, and weight, then submit.
+  Added pets appear in a live table showing each pet's profile and its task
+  count.
+- **Add a Care Task** — pick one of your pets, then set the task's description,
+  time (`HH:MM`), category (feeding / walk / medication / grooming), priority
+  (low / medium / high), and frequency (daily / weekly / monthly).
+- **Build Schedule** — choose how to organize everything:
+  - *Priority (highest first)* — every task, most important on top.
+  - *Time (earliest first)* — every task ordered by time of day.
+  - *Group by pet* — one table per pet.
+  A live **conflict banner** sits above the button: green when the day is clear,
+  yellow listing every clash when two tasks land on the same date and time.
+  Results render as clean tables with a human-readable priority label.
+
+### Example workflow
+
+1. **Add a pet** — create "Rex" (dog, Labrador).
+2. **Schedule tasks** — add Rex's "Morning walk" at `08:00` and "Evening walk"
+   at `18:00`, both daily, high priority.
+3. **Add a second pet and a clashing task** — add "Milo" (cat) with "Give
+   allergy meds" at `18:00`.
+4. **Generate the schedule** — pick *Time (earliest first)* and click
+   **Generate schedule**. The tasks come back time-ordered (08:00 → 18:00)
+   regardless of the order you entered them.
+5. **Read the conflict warning** — because Rex's evening walk and Milo's meds
+   both fall at `18:00`, the yellow banner flags a "different pets" conflict so
+   you can rebalance the day.
+
+### Key Scheduler behaviors on display
+
+- **Sorting** — tasks entered out of order are returned time- or priority-sorted
+  (`sort_by_time()`, `get_tasks_by_priority()`), keyed on parsed minutes so
+  `"9:00"` never sorts after `"18:00"`.
+- **Conflict warnings** — `check_conflicts()` powers the banner, catching both
+  same-pet double-bookings and cross-pet clashes.
+- **Grouping** — the *Group by pet* view uses `tasks_by_pet()`.
+- **Recurrence** — in the CLI demo, completing a daily task auto-spawns the next
+  day's occurrence (`mark_complete()` → `next_occurrence()`).
+
+### Sample CLI output (`python main.py`)
+
+```text
+============================================
+Today's Schedule
+============================================
+08:00  Rex    Morning walk (walk)
+09:00  Milo   Give allergy meds (medication)
+18:00  Rex    Evening walk (walk)
+21:00  Milo   Bedtime treat (feeding)
+--------------------------------------------
+4 task(s) remaining today.
+
+============================================
+Filtering demo
+============================================
+
+All of Milo's tasks:
+--------------------------------------------
+  07:30  Milo   Refill food bowl     [done]
+  07:30  Milo   Refill food bowl     [pending]
+  09:00  Milo   Give allergy meds    [pending]
+  21:00  Milo   Bedtime treat        [pending]
+
+Still pending:
+--------------------------------------------
+  07:30  Milo   Refill food bowl     [pending]
+  08:00  Rex    Morning walk         [pending]
+  09:00  Milo   Give allergy meds    [pending]
+  18:00  Rex    Evening walk         [pending]
+  21:00  Milo   Bedtime treat        [pending]
+
+Already completed:
+--------------------------------------------
+  07:30  Milo   Refill food bowl     [done]
+
+Rex's pending tasks:
+--------------------------------------------
+  08:00  Rex    Morning walk         [pending]
+  18:00  Rex    Evening walk         [pending]
+
+============================================
+Recurring-task demo
+============================================
+Completing: Morning walk (due 2026-07-06, daily)
+  -> auto-created task #7: Morning walk due 2026-07-07 (still pending)
+
+Rex's tasks now:
+--------------------------------------------
+  08:00  Rex    Morning walk         [done]
+  08:00  Rex    Morning walk         [pending]
+  18:00  Rex    Evening walk         [pending]
+
+============================================
+Conflict-detection demo
+============================================
+[!] 2 scheduling conflict(s) found:
+  - 09:00 (different pets) -> Milo: Give allergy meds, Rex: Brush coat
+  - 18:00 (same pet) -> Rex: Give joint supplement, Rex: Evening walk
+```
 
 **Screenshot or video** *(optional)*: <!-- Insert a screenshot or link to a demo video here -->
