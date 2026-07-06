@@ -155,13 +155,63 @@ st.divider()
 
 # --- Build Schedule ------------------------------------------------------
 st.subheader("Build Schedule")
-st.caption("Calls the Scheduler to order pending tasks across all pets.")
+st.caption("Calls the Scheduler to order and inspect tasks across all pets.")
+
+# Let the user pick how the Scheduler should organize the tasks. Each option
+# maps to a real Scheduler method so the UI is a thin view over the 'brain'.
+view = st.radio(
+    "Order tasks by",
+    ["Priority (highest first)", "Time (earliest first)", "Group by pet"],
+    horizontal=True,
+)
+
+# Surface the Scheduler's conflict detection up front so clashes are visible
+# before the owner commits to a plan.
+warning = scheduler.check_conflicts()
+if warning.startswith("[OK]"):
+    st.success(warning)
+else:
+    st.warning(warning)
+
+# reverse of PRIORITY_TO_INT so tables show "high" instead of a bare "1"
+INT_TO_PRIORITY = {v: k for k, v in PRIORITY_TO_INT.items()}
+
+
+def task_rows(tasks, include_pet=True):
+    """Turn CareTask objects into table-ready row dicts for st.table."""
+    rows = []
+    for t in tasks:
+        row = {}
+        if include_pet:
+            row["Pet"] = t.pet_name
+        row.update(
+            {
+                "Time": t.time,
+                "Task": t.description,
+                "Category": t.category,
+                "Priority": INT_TO_PRIORITY.get(t.priority, f"p{t.priority}"),
+                "Frequency": t.frequency,
+                "Status": "done" if t.completed else "pending",
+            }
+        )
+        rows.append(row)
+    return rows
+
 
 if st.button("Generate schedule"):
-    pending = scheduler.get_pending_tasks()   # <-- Scheduler is the 'brain'
-    if not pending:
-        st.info("No pending tasks. Add some tasks above.")
+    if not scheduler.all_tasks():
+        st.info("No tasks yet. Add some tasks above.")
+    elif view == "Group by pet":
+        grouped = scheduler.tasks_by_pet()   # {pet_name: [tasks priority-sorted]}
+        for pet_name, tasks in grouped.items():
+            st.markdown(f"**{pet_name}** — {len(tasks)} task(s)")
+            st.table(task_rows(tasks, include_pet=False))
     else:
-        st.write(f"{len(pending)} pending task(s), highest priority first:")
-        for task in pending:
-            st.markdown(f"- {task.summary()}")
+        if view.startswith("Time"):
+            tasks = scheduler.sort_by_time()          # earliest first
+            label = "ordered by time (earliest first)"
+        else:
+            tasks = scheduler.get_tasks_by_priority()  # highest priority first
+            label = "ordered by priority (highest first)"
+        st.success(f"{len(tasks)} task(s), {label}.")
+        st.table(task_rows(tasks))

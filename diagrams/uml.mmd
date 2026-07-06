@@ -1,16 +1,37 @@
 classDiagram
     %% PawPal+ class diagram
 
+    class CareTask {
+        +int taskId
+        +string description
+        +string time
+        +string frequency
+        +string category
+        +int priority
+        +bool completed
+        +date dueDate
+        +Pet pet
+        +minutes() int
+        +isRecurring() bool
+        +nextOccurrence() CareTask
+        +markComplete() CareTask
+        +markIncomplete() void
+        +summary() string
+    }
+
     class Pet {
         +int petId
-        +int ownerId
         +string name
         +string species
         +string breed
         +int age
         +float weight
+        +CareTask[] tasks
         +getPetInfo() string
         +updateProfile() void
+        +addTask(task) void
+        +removeTask(taskId) bool
+        +getPendingTasks() CareTask[]
     }
 
     class Owner {
@@ -18,38 +39,32 @@ classDiagram
         +string name
         +float hoursAvailableDaily
         +bool remindersEnabled
-    }
-
-    class CareTask {
-        +int taskId
-        +int petId
-        +string taskName
-        +string category
-        +int priority
-        +bool completed
+        +Pet[] pets
+        +addPet(pet) void
+        +removePet(petId) bool
+        +getPet(petId) Pet
+        +getAllTasks() CareTask[]
     }
 
     class Scheduler {
         +Owner[] owners
-        +Pet[] pets
-        +CareTask[] tasks
         +addOwner(owner) void
-        +addPet(pet) void
-        +addTask(task) void
-        +getOwner(ownerId) Owner
-        +getPet(petId) Pet
-        +getPetsForOwner(ownerId) Pet[]
-        +getTasksForPet(petId) CareTask[]
-        +getTasksForOwner(ownerId) CareTask[]
+        +allPets() Pet[]
+        +allTasks() CareTask[]
         +getTasksByCategory(category) CareTask[]
-        +getPendingTasks(petId) CareTask[]
+        +getPendingTasks() CareTask[]
+        +getTodaysSchedule(today) CareTask[]
+        +sortByTime() CareTask[]
+        +filterTasks(petName, completed) CareTask[]
+        +findConflicts(pendingOnly) CareTask[][]
+        +checkConflicts() string
+        +getTasksByPriority() CareTask[]
+        +tasksByPet() map
+        +findTask(taskId) CareTask
         +completeTask(taskId) bool
-        +removeTask(taskId) bool
     }
 
-    Owner "1" --> "1..*" Pet : owns
-    Pet "1" --> "0..*" CareTask : has
-    Owner "1" --> "0..*" CareTask : manages
     Scheduler "1" o-- "0..*" Owner : manages
-    Scheduler "1" o-- "0..*" Pet : manages
-    Scheduler "1" o-- "0..*" CareTask : manages
+    Owner "1" *-- "0..*" Pet : owns
+    Pet "1" *-- "0..*" CareTask : has
+    CareTask "0..*" --> "1" Pet : belongs to
