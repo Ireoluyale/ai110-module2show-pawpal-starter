@@ -1,6 +1,7 @@
 import streamlit as st
 
 from pawpal_system import CareTask, Pet, Owner, Scheduler
+from ai_planner import AIPlanner, estimate_minutes
 
 st.set_page_config(page_title="PawPal+", page_icon="🐾", layout="centered")
 
@@ -70,6 +71,8 @@ if "next_task_id" not in st.session_state:
 
 # map the friendly UI label to the domain's integer priority (1 = highest)
 PRIORITY_TO_INT = {"high": 1, "medium": 2, "low": 3}
+# reverse of PRIORITY_TO_INT so tables show "high" instead of a bare "1"
+INT_TO_PRIORITY = {v: k for k, v in PRIORITY_TO_INT.items()}
 
 # --- Add a Pet -----------------------------------------------------------
 st.markdown("### Add a Pet")
@@ -153,6 +156,71 @@ else:
 
 st.divider()
 
+# --- AI Care Planner (agentic) ------------------------------------------
+st.subheader("🤖 AI Care Planner")
+st.caption(
+    "An agentic AI that plans today, checks its own work against the Scheduler's "
+    "conflict and time-budget logic, revises, then submits a validated plan."
+)
+
+if not scheduler.all_tasks():
+    st.info("Add some tasks above, then let the AI plan the day.")
+else:
+    import os
+
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        st.caption(
+            "ℹ️ No `ANTHROPIC_API_KEY` set — the AI will use its built-in "
+            "rule-based fallback so the app still works."
+        )
+
+    if st.button("🐾 Generate AI plan"):
+        planner = AIPlanner(scheduler)
+        with st.spinner("The AI is planning and checking its work…"):
+            result = planner.plan_day()
+
+        badge = "🤖 Planned by Claude" if result.used_ai else "⚙️ Rule-based plan"
+        st.markdown(f"**{badge}**")
+        if result.note:
+            st.info(result.note)
+        if result.reasoning:
+            st.markdown(f"> {result.reasoning}")
+
+        budget = planner.budget_minutes
+        st.success(
+            f"Today's plan: {len(result.ordered)} task(s), "
+            f"{result.total_minutes}/{budget} minutes used."
+        )
+        if result.ordered:
+            st.table(
+                [
+                    {
+                        "Time": t.time,
+                        "Pet": t.pet_name,
+                        "Task": t.description,
+                        "Category": t.category,
+                        "Priority": INT_TO_PRIORITY.get(t.priority, f"p{t.priority}"),
+                        "Est. min": estimate_minutes(t),
+                    }
+                    for t in result.ordered
+                ]
+            )
+        if result.deferred:
+            st.markdown("**Deferred** (conflict or over budget):")
+            st.table(
+                [
+                    {
+                        "Time": t.time,
+                        "Pet": t.pet_name,
+                        "Task": t.description,
+                        "Priority": INT_TO_PRIORITY.get(t.priority, f"p{t.priority}"),
+                    }
+                    for t in result.deferred
+                ]
+            )
+
+st.divider()
+
 # --- Build Schedule ------------------------------------------------------
 st.subheader("Build Schedule")
 st.caption("Calls the Scheduler to order and inspect tasks across all pets.")
@@ -172,9 +240,6 @@ if warning.startswith("[OK]"):
     st.success(warning)
 else:
     st.warning(warning)
-
-# reverse of PRIORITY_TO_INT so tables show "high" instead of a bare "1"
-INT_TO_PRIORITY = {v: k for k, v in PRIORITY_TO_INT.items()}
 
 
 def task_rows(tasks, include_pet=True):

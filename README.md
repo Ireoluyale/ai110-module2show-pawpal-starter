@@ -41,6 +41,182 @@ The scheduling engine (`pawpal_system.py`) implements these algorithms:
 - **Daily / weekly recurrence** — completing a recurring task automatically
   spawns its next occurrence with the due date advanced (+1 day / +7 days).
 - **Grouping** — buckets tasks by category or by pet, each bucket sorted.
+- **🤖 Agentic AI planner** — Claude plans the day, checks its own work against
+  the Scheduler's real conflict/time-budget logic, revises, and submits a
+  validated plan (see [AI Care Planner](#-ai-care-planner-agentic-ai-feature)).
+
+## 🤖 AI Care Planner (agentic AI feature)
+
+`ai_planner.py` adds the project's AI feature: an **agentic workflow** where the
+AI can *plan, act, and check its own work* before committing to an answer.
+
+**How the agent loop works** (`AIPlanner.plan_day`):
+
+1. **Plan** — Claude reads the goal: build today's plan within the owner's daily
+   time budget, avoid two tasks booked at the same time, respect task priority.
+2. **Act** — it calls tools that read the *live* `Scheduler`: `inspect_schedule`
+   (today's pending tasks + estimated minutes), `check_conflicts`
+   (`Scheduler.check_conflicts`), and `validate_plan`.
+3. **Check its own work** — `validate_plan` re-runs the real conflict detection
+   and time-budget math on the AI's proposed ordering and returns `PASS` or
+   `FAIL: …`. The AI is required to iterate until it gets a `PASS`.
+4. **Submit** — only then does it call `submit_plan`, and that validated ordering
+   becomes the schedule the app displays.
+
+This is **fully integrated, not a bolt-on**: the AI's tools call the same domain
+methods the rest of PawPal+ uses, and its output *is* the plan shown in the UI.
+
+**Reliability & guardrails**
+
+- **Graceful fallback** — with no API key (or on any API error), a deterministic
+  rule-based planner runs instead, so the app always produces a plan.
+- **Logging** — every tool call and outcome is logged to `pawpal_ai.log`.
+- **Bounded loop** — the agentic loop is capped (`MAX_TOOL_ROUNDS`) and the AI's
+  submitted task IDs are re-verified against real pending tasks before use.
+
+### System diagram
+
+See [`diagrams/system_diagram.md`](diagrams/system_diagram.md) for a Mermaid
+diagram of the components, the input → process → output flow, and where the AI's
+results get checked (self-validation, human review, and the test suite).
+
+### Sample interactions
+
+Each example is an **input** (pets, tasks, and the owner's daily time budget) and
+the **plan the system returns**. The rule-based outputs below are copied verbatim
+from `python ai_planner.py` (no key needed, so they're reproducible); the
+Claude-powered output is representative of what the agent submits once
+`ANTHROPIC_API_KEY` is set.
+
+**Example 1 — same-time conflict (budget 3h).** Rex needs brushing at 09:00, but
+Milo's allergy meds are also at 09:00 and are higher priority. The planner keeps
+the higher-priority task in that slot and defers the other.
+
+```
+Input:  Rex  08:00 Morning walk (walk, medium)
+        Milo 09:00 Allergy meds (medication, high)
+        Rex  09:00 Brush coat (grooming, low)
+        Rex  18:00 Evening walk (walk, medium)
+
+Output (⚙️ rule-based):
+  Rule-based plan: fit 3 task(s) into the owner's 180-minute budget (65 min
+  used), highest priority first. Resolved same-time clashes by keeping the
+  higher-priority task. 1 task(s) deferred (conflict or over budget).
+
+  Today (65 min):
+    08:00  Rex    Morning walk (walk, p2)
+    09:00  Milo   Allergy meds (medication, p1)
+    18:00  Rex    Evening walk (walk, p2)
+  Deferred:
+    09:00  Rex    Brush coat (p3)     ← lost the 09:00 slot to Milo's meds
+```
+
+**Example 2 — over budget (budget 0.5h).** Three tasks won't fit in 30 minutes,
+so the planner keeps the highest-priority task and defers the rest.
+
+```
+Input:  Rex 07:30 Refill food  (feeding, medium)
+        Rex 08:00 Morning walk (walk, high)
+        Rex 18:00 Evening walk (walk, low)
+
+Output (⚙️ rule-based):
+  Rule-based plan: fit 1 task(s) into the owner's 30-minute budget (30 min used),
+  highest priority first. 2 task(s) deferred (conflict or over budget).
+
+  Today (30 min):
+    08:00  Rex    Morning walk (walk, p1)
+  Deferred:
+    07:30  Rex    Refill food (p2)
+    18:00  Rex    Evening walk (p3)
+```
+
+**Example 3 — the same conflict, with Claude enabled** (`ANTHROPIC_API_KEY` set).
+Same input as Example 1. The agent calls `inspect_schedule` and `check_conflicts`,
+drafts a plan, calls `validate_plan` (which FAILs because both 09:00 tasks are
+present), revises to drop the lower-priority one, gets a PASS, then `submit_plan`.
+The plan is the same, but it comes with the agent's own explanation:
+
+```
+Output (🤖 Planned by Claude):
+  "I kept Milo's allergy medication at 09:00 since medication is high priority
+   and time-sensitive, and moved Rex's coat brushing off today's plan because it
+   clashed with that slot and is the lowest-priority item. The two walks and the
+   meds fit comfortably in your 3-hour budget (65 of 180 minutes), so everything
+   except the grooming is scheduled."
+
+  Today (65 min):  08:00 Rex Morning walk · 09:00 Milo Allergy meds · 18:00 Rex Evening walk
+  Deferred:        Rex Brush coat (conflict with higher-priority meds)
+```
+
+> The two paths reach the same schedule here — by design, since the AI validates
+> against the *same* budget/conflict rules the fallback uses. Claude adds natural-
+> language reasoning and handles fuzzier trade-offs; the fallback guarantees a
+> sensible plan even with no key.
+
+### Design decisions & trade-offs
+
+- **Agentic tool-use loop, not a single prompt.** A one-shot "here are the tasks,
+  give me a plan" prompt would let the model *assert* a schedule without any check
+  that it's valid. Instead the agent must call `validate_plan` and get a `PASS`
+  before it can `submit_plan`. **Trade-off:** more API round-trips (higher latency
+  and cost) in exchange for plans that are actually checked against real rules.
+- **Tools wrap the real `Scheduler`.** `inspect_schedule`, `check_conflicts`, and
+  `validate_plan` read the same domain objects and call the same methods
+  (`Scheduler.find_conflicts`, the owner's `hours_available_daily`) as the rest of
+  the app. The AI can't reason over a stale or invented copy of the data — there's
+  one source of truth. This is what makes the feature *integrated* rather than a
+  bolt-on.
+- **A validator gate is the "check its own work" step.** Making `validate_plan`
+  return `FAIL: …` with specifics (which id is unknown, how far over budget, which
+  slot clashes) turns self-correction into a concrete loop the model can act on,
+  instead of hoping it self-audits.
+- **Durations estimated by category, not stored on `CareTask`.** Adding a
+  `duration` field would have changed the domain model and its tests. Estimating
+  by category (`walk`≈30, `medication`≈5, …) gives the planner a real time budget
+  to reason about with zero changes to `pawpal_system.py`. **Trade-off:** the
+  minutes are approximations, not exact durations.
+- **Deterministic rule-based fallback.** The AI path is non-deterministic and
+  needs a key, network, and credits. A deterministic fallback means the app always
+  works, costs nothing to demo, is fully reproducible, and — importantly — gives
+  the test suite a stable surface to assert against. **Trade-off:** two code paths
+  to maintain, kept in sync by making both obey the same budget/conflict rules.
+- **Default model `claude-opus-5`.** Chosen for reasoning quality; it's a single
+  `MODEL` constant in `ai_planner.py`, so swapping to `claude-sonnet-5` or
+  `claude-haiku-4-5` for lower cost is a one-line change.
+
+### Testing summary — what worked, what didn't, what I learned
+
+**What worked**
+- The **deterministic fallback is fully unit-tested** (`tests/test_ai_planner.py`,
+  5 tests): over-budget deferral, same-time conflict resolution, the empty-schedule
+  case, category-based duration estimates, and that no key means the fallback runs.
+  These pass with no network and no key, so CI stays green.
+- A **headless Streamlit smoke test** (`streamlit.testing.v1.AppTest`) renders the
+  app and clicks "Generate AI plan" with 0 exceptions — it exercises the real UI
+  wiring, not just the module in isolation.
+
+**What didn't work at first (and how it was fixed)**
+- The app first crashed on the AI section with a `NameError`: `INT_TO_PRIORITY`
+  was defined *after* the new section used it. The `AppTest` smoke test caught it;
+  the fix was moving that definition up next to `PRIORITY_TO_INT`.
+- An early import pulled a symbol (`INT_TO_PRIORITY`) from `ai_planner` that didn't
+  exist there — a reminder to import from where a name actually lives.
+
+**What I learned**
+- **You can't unit-test a live LLM deterministically** — it needs a key, costs
+  money, and its wording varies. The lesson was to put the *checkable logic* (the
+  budget/conflict rules) in code the tests can pin down, and have the AI validate
+  against that same logic. The guardrails (`validate_plan` + the fallback) double
+  as the testable surface.
+- **Design the AI feature around a deterministic core.** Because the fallback and
+  the AI obey identical rules, a passing fallback test also documents what a valid
+  AI plan must satisfy.
+
+Run the AI-specific tests with:
+
+```bash
+pytest tests/test_ai_planner.py -v
+```
 
 ## Getting started
 
@@ -50,6 +226,33 @@ The scheduling engine (`pawpal_system.py`) implements these algorithms:
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+```
+
+### Enable the AI planner (optional but recommended)
+
+The app runs without a key (it uses the rule-based fallback). To enable the real
+Claude-powered agent, set your Anthropic API key:
+
+```bash
+# macOS / Linux
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# Windows PowerShell
+$env:ANTHROPIC_API_KEY = "sk-ant-..."
+```
+
+Get a key at <https://console.anthropic.com>. The default model is `claude-opus-5`;
+change `MODEL` in `ai_planner.py` to `claude-sonnet-5` or `claude-haiku-4-5` for
+lower cost.
+
+### Run
+
+```bash
+# Streamlit app (includes the AI Care Planner section)
+python -m streamlit run app.py
+
+# Or the CLI demo of the planner (uses the fallback if no API key is set)
+python ai_planner.py
 ```
 
 ### Suggested workflow
